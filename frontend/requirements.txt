@@ -14,7 +14,7 @@ bs4==0.0.2
 build==1.2.1
 CacheControl==0.14.0
 cachetools==5.3.3
-certifi==2024.2.2
+certifi==2024.7.4
 cffi==1.17.0
 charset-normalizer==3.3.2
 chroma-hnswlib==0.7.3
