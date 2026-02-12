@@ -58,8 +58,8 @@ steps:
       - '-c'
       - |
         source env.vars
-        if ! gsutil ls -b gs://$$BACKEND_STAGING_BUCKET > /dev/null 2>&1; then
-          gsutil mb -l $$REGION gs://$$BACKEND_STAGING_BUCKET
+        if ! gcloud storage ls --buckets gs://$$BACKEND_STAGING_BUCKET > /dev/null 2>&1; then
+          gcloud storage buckets create gs://$$BACKEND_STAGING_BUCKET --location=$$REGION
           echo "Created bucket: gs://$$BACKEND_STAGING_BUCKET"
         else
           echo "Bucket gs://$$BACKEND_STAGING_BUCKET already exists."
