@@ -6,7 +6,7 @@ cffi==1.17.0
 charset-normalizer==3.3.2
 click==8.1.7
 cloudevents==1.11.0
-cryptography==43.0.0
+cryptography==46.0.7
 deprecation==2.1.0
 firebase-admin==6.5.0
 Flask==3.0.3
