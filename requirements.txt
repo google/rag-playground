@@ -29,5 +29,5 @@ requests==2.32.3
 six==1.16.0
 soupsieve==2.6
 urllib3==2.2.2
-uv==0.3.3
+uv==0.11.6
 watchdog==4.0.2
