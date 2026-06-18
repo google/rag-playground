@@ -19,7 +19,7 @@ setup(
     version="1.0.0",
     packages=find_packages(),
     install_requires=[
-        "aiohttp==3.9.5",
+        "aiohttp==3.14.1",
         "aiosignal==1.3.1",
         "annotated-types==0.7.0",
         "apache-beam==2.57.0",
@@ -126,7 +126,7 @@ setup(
         "proto-plus==1.24.0",
         "protobuf==4.25.3",
         "psutil==6.0.0",
-        "pyarrow==15.0.2",
+        "pyarrow==23.0.1",
         "pyarrow-hotfix==0.6",
         "pyasn1==0.6.0",
         "pyasn1_modules==0.4.0",
