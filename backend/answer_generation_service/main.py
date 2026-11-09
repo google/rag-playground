@@ -59,7 +59,108 @@ Question:
 Answer:
 """
 
+# Models offered by the frontend. Deployments can override the allowlist with
+# a comma-separated ALLOWED_LLM_MODELS environment variable.
+DEFAULT_ALLOWED_MODELS = (
+    "gemini-1.0-pro-001",
+    "gemini-1.0-pro-002",
+    "gemini-1.5-pro-001",
+    "gemini-1.5-flash-001",
+)
+
+
+def _load_allowed_models() -> Dict[str, str]:
+  configured = [
+      m.strip()
+      for m in os.environ.get("ALLOWED_LLM_MODELS", "").split(",")
+      if m.strip()
+  ]
+  return {m: m for m in (configured or DEFAULT_ALLOWED_MODELS)}
+
+
+ALLOWED_MODELS = _load_allowed_models()
+
+ALLOWED_MODEL_PARAMS = frozenset({
+    "temperature",
+    "max_output_tokens",
+    "top_p",
+    "top_k",
+})
+
 embedding_function = VertexAIEmbeddings(model_name="text-embedding-004")
+
+
+def validate_model_name(model_name: Any) -> str:
+  """Validate that model_name is in the strict allowlist of permitted models."""
+  if not isinstance(model_name, str) or model_name not in ALLOWED_MODELS:
+    log(f"Invalid or unauthorized model_name: {model_name}", level="ERROR")
+    raise ValueError(f"Unsupported model_name: {model_name}")
+  return ALLOWED_MODELS[model_name]
+
+
+def validate_model_params(model_params: Any) -> Dict[str, Any]:
+  """Validate and sanitize model_params against allowed generation parameters."""
+  if model_params is None:
+    return {}
+  if not isinstance(model_params, dict):
+    log("Invalid model_params: must be a JSON object/dict", level="ERROR")
+    raise ValueError("model_params must be a dictionary")
+
+  unsupported_keys = set(model_params.keys()) - ALLOWED_MODEL_PARAMS
+  if unsupported_keys:
+    log(
+        f"Unsupported or unsafe model_params keys: {sorted(unsupported_keys)}",
+        level="ERROR",
+    )
+    raise ValueError(
+        f"Unsupported model_params keys: {sorted(unsupported_keys)}"
+    )
+
+  sanitized: Dict[str, Any] = {}
+  if "temperature" in model_params and model_params["temperature"] is not None:
+    temp = model_params["temperature"]
+    if (
+        isinstance(temp, bool)
+        or not isinstance(temp, (int, float))
+        or not (0.0 <= float(temp) <= 2.0)
+    ):
+      raise ValueError("temperature must be a number between 0.0 and 2.0")
+    sanitized["temperature"] = float(temp)
+
+  if (
+      "max_output_tokens" in model_params
+      and model_params["max_output_tokens"] is not None
+  ):
+    max_tokens = model_params["max_output_tokens"]
+    if (
+        isinstance(max_tokens, bool)
+        or not isinstance(max_tokens, int)
+        or not (1 <= max_tokens <= 8192)
+    ):
+      raise ValueError("max_output_tokens must be an integer between 1 and 8192")
+    sanitized["max_output_tokens"] = int(max_tokens)
+
+  if "top_p" in model_params and model_params["top_p"] is not None:
+    top_p = model_params["top_p"]
+    if (
+        isinstance(top_p, bool)
+        or not isinstance(top_p, (int, float))
+        or not (0.0 <= float(top_p) <= 1.0)
+    ):
+      raise ValueError("top_p must be a number between 0.0 and 1.0")
+    sanitized["top_p"] = float(top_p)
+
+  if "top_k" in model_params and model_params["top_k"] is not None:
+    top_k = model_params["top_k"]
+    if (
+        isinstance(top_k, bool)
+        or not isinstance(top_k, int)
+        or not (1 <= top_k <= 40)
+    ):
+      raise ValueError("top_k must be an integer between 1 and 40")
+    sanitized["top_k"] = int(top_k)
+
+  return sanitized
 
 
 def prepare_filter(filters: Any = {}) -> Optional[List[Namespace]]:
@@ -183,10 +284,12 @@ def execute_rag_query(request) -> Any:
   """Execute a RAG (Retrieval-Augmented Generation) query based on the provided request."""
   try:
     request_data = request.get_json()
+    if not isinstance(request_data, dict):
+      raise ValueError("Request payload must be a JSON object")
     retriever_name = request_data["retriever_name"]
     query = request_data["query"]
-    model_name = request_data["model_name"]
-    model_params = request_data.get("model_params", {})
+    model_name = validate_model_name(request_data["model_name"])
+    model_params = validate_model_params(request_data.get("model_params", {}))
     index_name = request_data["index_name"]
     vector_store_type = request_data.get(
         "vector_store_type", "VectorSearchVectorStoreDatastore"
@@ -222,9 +325,12 @@ def execute_rag_query(request) -> Any:
         prompt_template=prompt_template,
     )
 
+  except ValueError as e:
+    log(f"Invalid request in RAG query: {str(e)}", level="ERROR")
+    return jsonify({"error": str(e)}), 400
   except Exception as e:
-    log(f"Error executing RAG query: {str(e)}")
-    return jsonify({"error": str(e)}), 500
+    log(f"Error executing RAG query: {str(e)}", level="ERROR")
+    return jsonify({"error": "Internal server error"}), 500
 
   else:
     log("RAG query executed successfully")
