@@ -14,7 +14,13 @@
 
 import logging
 import apache_beam as beam
-from custom_transforms.docai_parser import DocAIParser
+from custom_transforms.docai_parser import (
+    DocAIParser,
+    validate_gcs_uri,
+    validate_location,
+    validate_processor_name,
+    validate_project_id,
+)
 
 
 class GCSLoaderFn(beam.DoFn):
@@ -39,21 +45,34 @@ class GCSLoaderFn(beam.DoFn):
       document_splitter_config = base_element["document_splitter"]["config"]
       vector_store_config = base_element["vector_store"]["config"]
 
+      project_id = validate_project_id(data_loader_config.get("project_id"))
+      location = validate_location(data_loader_config.get("location"))
+      processor_name = validate_processor_name(
+          data_loader_config.get("processor_name"), expected_location=location
+      )
+      gcs_output_path = data_loader_config.get("gcs_output_path")
+      if gcs_output_path is not None:
+        gcs_output_path = validate_gcs_uri(
+            gcs_output_path, allow_prefix_only=True
+        )
+
+      blob = element["blob"]
+      validate_gcs_uri(getattr(blob, "path", None))
+
       parser_key = (
-          data_loader_config["project_id"],
-          data_loader_config["location"],
-          data_loader_config["processor_name"],
+          project_id,
+          location,
+          processor_name,
       )
       if parser_key not in self.parsers:
         self.parsers[parser_key] = DocAIParser(
-            project_id=data_loader_config["project_id"],
-            location=data_loader_config["location"],
-            processor_name=data_loader_config["processor_name"],
-            gcs_output_path=data_loader_config["gcs_output_path"],
+            project_id=project_id,
+            location=location,
+            processor_name=processor_name,
+            gcs_output_path=gcs_output_path,
         )
 
       parser = self.parsers[parser_key]
-      blob = element["blob"]
       chunk_size = document_splitter_config["chunk_size"]
       index_name = vector_store_config["index_name"]
 
