@@ -14,7 +14,9 @@
 
 import json
 import logging
-from typing import Sequence, Tuple
+import os
+import re
+from typing import Any, Dict, Optional, Sequence, Tuple
 import apache_beam as beam
 from langchain_core.documents import Document
 from langchain_google_vertexai import (
@@ -27,13 +29,191 @@ from langchain_google_vertexai.vectorstores.document_storage import (
     DocumentStorage,
 )
 
+DEFAULT_ALLOWED_REGIONS: Tuple[str, ...] = ("us-central1",)
+DEFAULT_ALLOWED_EMBEDDING_MODELS: Tuple[str, ...] = (
+    "text-embedding-004",
+    "text-embedding-preview-0815",
+    "text-multilingual-embedding-002",
+)
+
+_PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+_REGION_PATTERN = re.compile(r"^[a-z]+-[a-z]+[0-9]+$")
+_RESOURCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _parse_env_allowlist(*env_vars: str) -> Tuple[str, ...]:
+  """Parse a deduplicated tuple of allowlisted values from environment variables."""
+  values = []
+  for env_var in env_vars:
+    raw = os.environ.get(env_var, "")
+    if raw:
+      for item in raw.split(","):
+        stripped = item.strip()
+        if stripped and stripped not in values:
+          values.append(stripped)
+  return tuple(values)
+
 
 class UpsertToVectorSearchFn(beam.DoFn):
   """DoFn for upserting documents to Vector Search."""
 
+  def __init__(
+      self,
+      allowed_projects: Optional[Sequence[str]] = None,
+      allowed_regions: Optional[Sequence[str]] = None,
+      allowed_index_ids: Optional[Sequence[str]] = None,
+      allowed_endpoint_ids: Optional[Sequence[str]] = None,
+      allowed_embedding_models: Optional[Sequence[str]] = None,
+  ):
+    super().__init__()
+    self._init_allowed_projects = (
+        tuple(allowed_projects) if allowed_projects is not None else None
+    )
+    self._init_allowed_regions = (
+        tuple(allowed_regions) if allowed_regions is not None else None
+    )
+    self._init_allowed_index_ids = (
+        tuple(allowed_index_ids) if allowed_index_ids is not None else None
+    )
+    self._init_allowed_endpoint_ids = (
+        tuple(allowed_endpoint_ids)
+        if allowed_endpoint_ids is not None
+        else None
+    )
+    self._init_allowed_embedding_models = (
+        tuple(allowed_embedding_models)
+        if allowed_embedding_models is not None
+        else None
+    )
+    self.vector_stores = {}
+    self.datastore_clients = {}
+    self._load_allowlists()
+
+  def _load_allowlists(self) -> None:
+    """Load trusted Vector Search destination allowlists from init args or environment."""
+    self.allowed_projects = (
+        self._init_allowed_projects
+        if self._init_allowed_projects is not None
+        else _parse_env_allowlist(
+            "ALLOWED_VECTOR_STORE_PROJECTS",
+            "VERTEX_AI_PROJECT_ID",
+            "PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
+        )
+    )
+    self.allowed_regions = (
+        self._init_allowed_regions
+        if self._init_allowed_regions is not None
+        else (
+            _parse_env_allowlist(
+                "ALLOWED_VECTOR_STORE_REGIONS",
+                "VERTEX_AI_REGION",
+                "REGION",
+            )
+            or DEFAULT_ALLOWED_REGIONS
+        )
+    )
+    self.allowed_index_ids = (
+        self._init_allowed_index_ids
+        if self._init_allowed_index_ids is not None
+        else _parse_env_allowlist(
+            "ALLOWED_VECTOR_STORE_INDEX_IDS",
+            "VERTEX_AI_INDEX_ID",
+        )
+    )
+    self.allowed_endpoint_ids = (
+        self._init_allowed_endpoint_ids
+        if self._init_allowed_endpoint_ids is not None
+        else _parse_env_allowlist(
+            "ALLOWED_VECTOR_STORE_ENDPOINT_IDS",
+            "VERTEX_AI_ENDPOINT_ID",
+            "VERTEX_AI_INDEX_ENDPOINT_ID",
+        )
+    )
+    self.allowed_embedding_models = (
+        self._init_allowed_embedding_models
+        if self._init_allowed_embedding_models is not None
+        else (
+            _parse_env_allowlist("ALLOWED_EMBEDDING_MODELS")
+            or DEFAULT_ALLOWED_EMBEDDING_MODELS
+        )
+    )
+
+  @staticmethod
+  def _resolve_allowed_value(
+      untrusted_value: Any,
+      allowlist: Sequence[str],
+      field_name: str,
+      pattern: Optional[re.Pattern[str]] = None,
+  ) -> str:
+    """Validate an untrusted config value against a trusted allowlist and return the trusted string."""
+    if not allowlist:
+      raise ValueError(
+          f"Trusted allowlist for '{field_name}' is not configured; "
+          "refusing untrusted egress connection."
+      )
+    if not isinstance(untrusted_value, str) or not untrusted_value:
+      raise ValueError(
+          f"Invalid or missing '{field_name}' in vector_store_config."
+      )
+    if pattern is not None and not pattern.fullmatch(untrusted_value):
+      raise ValueError(
+          f"Invalid format for '{field_name}': {untrusted_value!r}."
+      )
+    for allowed in allowlist:
+      if allowed == untrusted_value:
+        return allowed
+    raise ValueError(
+        f"Unauthorized '{field_name}' value {untrusted_value!r} is not in the "
+        "configured allowlist."
+    )
+
+  def _validate_and_resolve_config(
+      self, vector_store_config: Any
+  ) -> Dict[str, str]:
+    """Validate vector_store_config against trusted allowlists and return trusted values."""
+    if not isinstance(vector_store_config, dict):
+      raise ValueError("vector_store_config must be a dictionary.")
+
+    if not hasattr(self, "allowed_projects"):
+      self._load_allowlists()
+
+    return {
+        "project_id": self._resolve_allowed_value(
+            vector_store_config.get("project_id"),
+            self.allowed_projects,
+            "project_id",
+            _PROJECT_ID_PATTERN,
+        ),
+        "region": self._resolve_allowed_value(
+            vector_store_config.get("region"),
+            self.allowed_regions,
+            "region",
+            _REGION_PATTERN,
+        ),
+        "index_id": self._resolve_allowed_value(
+            vector_store_config.get("index_id"),
+            self.allowed_index_ids,
+            "index_id",
+            _RESOURCE_ID_PATTERN,
+        ),
+        "endpoint_id": self._resolve_allowed_value(
+            vector_store_config.get("endpoint_id"),
+            self.allowed_endpoint_ids,
+            "endpoint_id",
+            _RESOURCE_ID_PATTERN,
+        ),
+        "embedding_model": self._resolve_allowed_value(
+            vector_store_config.get("embedding_model"),
+            self.allowed_embedding_models,
+            "embedding_model",
+        ),
+    }
+
   def setup(self):
     self.vector_stores = {}
     self.datastore_clients = {}
+    self._load_allowlists()
 
   def process(self, element):
     """Process and upsert documents to Vector Search.
@@ -46,19 +226,21 @@ class UpsertToVectorSearchFn(beam.DoFn):
         str: A status message indicating the result of the upsert operation.
     """
     key, docs = element
+    base_element = None
     try:
       if not isinstance(docs, list):
         docs = [docs]
 
       base_element = docs[0].metadata["base_element"]
       vector_store_config = base_element["vector_store"]["config"]
+      trusted_config = self._validate_and_resolve_config(vector_store_config)
 
       if key not in self.vector_stores:
         DATASTORE_DB_NAME = ""
 
         sdk_manager = VectorSearchSDKManager(
-            project_id=vector_store_config["project_id"],
-            region=vector_store_config["region"],
+            project_id=trusted_config["project_id"],
+            region=trusted_config["region"],
         )
 
         self.datastore_clients[key] = sdk_manager.get_datastore_client(
@@ -67,12 +249,12 @@ class UpsertToVectorSearchFn(beam.DoFn):
 
         self.vector_stores[key] = (
             VectorSearchVectorStoreDatastore.from_components(
-                project_id=vector_store_config["project_id"],
-                region=vector_store_config["region"],
-                index_id=vector_store_config["index_id"],
-                endpoint_id=vector_store_config["endpoint_id"],
+                project_id=trusted_config["project_id"],
+                region=trusted_config["region"],
+                index_id=trusted_config["index_id"],
+                endpoint_id=trusted_config["endpoint_id"],
                 embedding=VertexAIEmbeddings(
-                    model_name=vector_store_config["embedding_model"]
+                    model_name=trusted_config["embedding_model"]
                 ),
                 stream_update=True,
             )

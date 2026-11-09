@@ -157,7 +157,11 @@ def install():
   if not _importable("langchain_google_vertexai.vectorstores.document_storage"):
     _module(
         "langchain_google_vertexai.vectorstores.document_storage",
-        DataStoreDocumentStorage=type("DataStoreDocumentStorage", (), {}),
+        DataStoreDocumentStorage=type(
+            "DataStoreDocumentStorage",
+            (),
+            {"__init__": lambda self, *args, **kwargs: None},
+        ),
         DocumentStorage=type("DocumentStorage", (), {}),
     )
 
