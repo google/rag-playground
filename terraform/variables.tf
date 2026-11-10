@@ -202,6 +202,75 @@ variable "document_ai_processor_type" {
   default     = "LAYOUT_PARSER_PROCESSOR"
 }
 
+# --- Dataflow security allowlists ---
+# Empty list = use the default derived from resources in this configuration
+# (see locals in dataflow.tf).
+variable "dataflow_allowed_gcs_buckets" {
+  description = "GCS buckets the pipeline may read documents from or write Document AI output to. Default: the RAG bucket (<project_id>-rag)."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_gcp_projects" {
+  description = "Projects allowed for GCS input and as the Document AI quota project. Default: [project_id]."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_gcs_prefixes" {
+  description = "Optional GCS object prefixes the pipeline may read. Default: no prefix restriction."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_docai_processors" {
+  description = "Document AI processor resource names (projects/<number>/locations/<loc>/processors/<id>). Default: the layout parser processor created by this configuration."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_docai_locations" {
+  description = "Document AI locations. Default: the location of the layout parser processor."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_vector_store_projects" {
+  description = "Projects that Vector Search upserts may target. Default: [project_id]."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_vector_store_regions" {
+  description = "Regions that Vector Search upserts may target. Default: [region]."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_vector_store_index_ids" {
+  description = "Vector Search index IDs that may receive upserts. Default: the index created by this configuration."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_vector_store_endpoint_ids" {
+  description = "Vector Search index endpoint IDs that may receive upserts. Default: the endpoint created by this configuration."
+  type        = list(string)
+  default     = []
+}
+
+variable "dataflow_allowed_embedding_models" {
+  description = "Vertex AI embedding models. Default: the pipeline's built-in list (text-embedding-004, text-embedding-preview-0815, text-multilingual-embedding-002)."
+  type        = list(string)
+  default     = []
+}
+
+variable "allowed_llm_models" {
+  description = "LLMs the answer generation service and backend accept. Default: the models offered by the frontend."
+  type        = list(string)
+  default     = []
+}
+
 # --- Cloud Functions ---
 variable "cf-metadata" {
   description = "Configurations of Cloud Functions"

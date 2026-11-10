@@ -78,6 +78,13 @@ resource "google_cloud_run_v2_service" "backend" {
   template {
     containers {
       image = docker_registry_image.backend.name
+      dynamic "env" {
+        for_each = length(var.allowed_llm_models) > 0 ? [join(",", var.allowed_llm_models)] : []
+        content {
+          name  = "ALLOWED_LLM_MODELS"
+          value = env.value
+        }
+      }
     }
     
     annotations = {

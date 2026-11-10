@@ -13,10 +13,19 @@
 # limitations under the License.
 
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterator, List, Optional, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Collection,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+)
 
 from langchain_core.document_loaders import BaseBlobParser
 from langchain_core.document_loaders.blob_loaders import Blob
@@ -32,6 +41,185 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9\-]{4,28}[a-z0-9]$")
+_LOCATION_PATTERN = re.compile(r"^[a-z]{2,}(?:-[a-z]+[0-9]+)?$")
+_VALID_GCP_DOCAI_LOCATIONS = frozenset({
+    "us",
+    "eu",
+    "us-central1",
+    "us-east1",
+    "us-east4",
+    "us-west1",
+    "europe-west1",
+    "europe-west2",
+    "europe-west3",
+    "europe-west4",
+    "asia-east1",
+    "asia-northeast1",
+    "asia-southeast1",
+})
+_PROCESSOR_NAME_PATTERN = re.compile(
+    r"^projects/([0-9]+)/locations/([a-z0-9\-]+)/processors/([a-z0-9]+)"
+    r"(?:/processorVersions/[a-zA-Z0-9\-._]+)?$"
+)
+_GCS_BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._\-]{1,61}[a-z0-9]$")
+
+
+def _parse_env_allowlist(*env_vars: str) -> Set[str]:
+  """Reads a set of allowed values from one or more environment variables."""
+  allowed: Set[str] = set()
+  for var in env_vars:
+    raw = os.environ.get(var, "")
+    for item in raw.split(","):
+      cleaned = item.strip()
+      if cleaned:
+        allowed.add(cleaned)
+  return allowed
+
+
+def _explicit_allowlist(values: Collection[str]) -> Set[str]:
+  return {v.strip() for v in values if isinstance(v, str) and v.strip()}
+
+
+# Each getter prefers an explicit allowlist (e.g. from Dataflow pipeline
+# options); None means "fall back to environment variables".
+def _get_allowed_project_ids(
+    allowed: Optional[Collection[str]] = None,
+) -> Set[str]:
+  if allowed is not None:
+    return _explicit_allowlist(allowed)
+  return _parse_env_allowlist(
+      "ALLOWED_GCP_PROJECTS",
+      "PROJECT_ID",
+      "GOOGLE_CLOUD_PROJECT",
+  )
+
+
+def _get_allowed_locations(
+    allowed: Optional[Collection[str]] = None,
+) -> Set[str]:
+  if allowed is not None:
+    return _explicit_allowlist(allowed)
+  configured = _parse_env_allowlist("ALLOWED_DOCAI_LOCATIONS")
+  return configured if configured else {"us", "eu"}
+
+
+def _get_allowed_processors(
+    allowed: Optional[Collection[str]] = None,
+) -> Set[str]:
+  if allowed is not None:
+    return _explicit_allowlist(allowed)
+  return _parse_env_allowlist("ALLOWED_DOCAI_PROCESSORS")
+
+
+def _get_allowed_gcs_buckets(
+    allowed: Optional[Collection[str]] = None,
+) -> Set[str]:
+  if allowed is not None:
+    return _explicit_allowlist(allowed)
+  return _parse_env_allowlist("ALLOWED_GCS_BUCKETS", "RAG_GCS_BUCKET")
+
+
+def _as_tuple(values: Optional[Collection[str]]) -> Optional[tuple]:
+  return tuple(values) if values is not None else None
+
+
+def validate_project_id(
+    project_id: Optional[str],
+    allowed_projects: Optional[Collection[str]] = None,
+) -> str:
+  """Validates a GCP project_id against format and configured allowlist."""
+  if not project_id or not isinstance(project_id, str):
+    raise ValueError("A valid GCP project_id must be provided.")
+  if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+    raise ValueError(f"Invalid GCP project_id format: {project_id!r}")
+  allowed_set = _get_allowed_project_ids(allowed_projects)
+  if not allowed_set or project_id not in allowed_set:
+    raise ValueError(
+        f"Project ID {project_id!r} is not in the configured allowlist."
+    )
+  return project_id
+
+
+def validate_location(
+    location: Optional[str],
+    allowed_locations: Optional[Collection[str]] = None,
+) -> str:
+  """Validates a Document AI location against strict format and allowlist."""
+  if not location or not isinstance(location, str):
+    raise ValueError("A valid Document AI location must be provided.")
+  if (
+      not _LOCATION_PATTERN.fullmatch(location)
+      or location not in _VALID_GCP_DOCAI_LOCATIONS
+  ):
+    raise ValueError(f"Invalid Document AI location: {location!r}")
+  if location not in _get_allowed_locations(allowed_locations):
+    raise ValueError(
+        f"Document AI location {location!r} is not in the configured allowlist."
+    )
+  return location
+
+
+def validate_processor_name(
+    processor_name: Optional[str],
+    expected_location: Optional[str] = None,
+    allowed_processors: Optional[Collection[str]] = None,
+) -> str:
+  """Validates a Document AI processor resource name and checks allowlist."""
+  if not processor_name or not isinstance(processor_name, str):
+    raise ValueError("A Document AI processor name should be provided.")
+  match = _PROCESSOR_NAME_PATTERN.fullmatch(processor_name)
+  if not match:
+    raise ValueError(
+        f"Processor name {processor_name} has the wrong format. If your"
+        " prediction endpoint looks like"
+        " https://us-documentai.googleapis.com/v1/projects/PROJECT_ID/locations/us/processors/PROCESSOR_ID:process,"
+        " use only projects/PROJECT_ID/locations/us/processors/PROCESSOR_ID"
+        " part."
+    )
+  proc_location = match.group(2)
+  if expected_location and proc_location != expected_location:
+    raise ValueError(
+        f"Processor location {proc_location!r} does not match configured"
+        f" client location {expected_location!r}."
+    )
+  allowed_set = _get_allowed_processors(allowed_processors)
+  if not allowed_set or processor_name not in allowed_set:
+    raise ValueError(
+        f"Processor name {processor_name!r} is not in the configured allowlist."
+    )
+  return processor_name
+
+
+def validate_gcs_uri(
+    gcs_uri: Optional[str],
+    allow_prefix_only: bool = False,
+    allowed_buckets: Optional[Collection[str]] = None,
+) -> str:
+  """Validates a gs:// URI format, prevents traversal, and checks bucket allowlist."""
+  if not gcs_uri or not isinstance(gcs_uri, str):
+    raise ValueError("A valid GCS URI must be provided.")
+  if not gcs_uri.startswith("gs://"):
+    raise ValueError(f"Invalid GCS URI: {gcs_uri!r}")
+  bucket, _, path = gcs_uri[len("gs://") :].partition("/")
+  if not _GCS_BUCKET_PATTERN.fullmatch(bucket) or ".." in bucket:
+    raise ValueError(f"Invalid GCS bucket name in URI: {gcs_uri!r}")
+  if "\\" in path or "\x00" in path:
+    raise ValueError(f"Invalid characters in GCS URI: {gcs_uri!r}")
+  segments = [seg for seg in path.split("/") if seg]
+  if any(seg in (".", "..") for seg in segments):
+    raise ValueError(f"Path traversal detected in GCS URI: {gcs_uri!r}")
+  if not allow_prefix_only and (not segments or path.endswith("/")):
+    raise ValueError(
+        f"GCS URI must point to a specific object blob: {gcs_uri!r}"
+    )
+  allowed_set = _get_allowed_gcs_buckets(allowed_buckets)
+  if not allowed_set or bucket not in allowed_set:
+    raise ValueError(
+        f"GCS bucket {bucket!r} is not in the configured allowlist."
+    )
+  return gcs_uri
 
 
 @dataclass
@@ -57,6 +245,10 @@ class DocAIParser(BaseBlobParser):
       location: Optional[str] = None,
       gcs_output_path: Optional[str] = None,
       processor_name: Optional[str] = None,
+      allowed_projects: Optional[Collection[str]] = None,
+      allowed_locations: Optional[Collection[str]] = None,
+      allowed_processors: Optional[Collection[str]] = None,
+      allowed_buckets: Optional[Collection[str]] = None,
   ) -> None:
     """Initializes the parser.
 
@@ -67,6 +259,12 @@ class DocAIParser(BaseBlobParser):
         gcs_output_path: a path on Google Cloud Storage to store parsing results
         processor_name: full resource name of a Document AI processor or
           processor version
+        allowed_projects: allowlisted quota project IDs (None: env fallback)
+        allowed_locations: allowlisted Document AI locations (None: env
+          fallback)
+        allowed_processors: allowlisted processor resource names (None: env
+          fallback)
+        allowed_buckets: allowlisted GCS buckets (None: env fallback)
 
     You should provide either a client or location (and then a client
         would be instantiated).
@@ -78,20 +276,30 @@ class DocAIParser(BaseBlobParser):
           "a client."
       )
 
-    pattern = r"projects\/[0-9]+\/locations\/[a-z\-0-9]+\/processors\/[a-z0-9]+"
-    if processor_name and not re.fullmatch(pattern, processor_name):
-      raise ValueError(
-          f"Processor name {processor_name} has the wrong format. If your"
-          " prediction endpoint looks like"
-          " https://us-documentai.googleapis.com/v1/projects/PROJECT_ID/locations/us/processors/PROCESSOR_ID:process,"
-          " use only projects/PROJECT_ID/locations/us/processors/PROCESSOR_ID"
-          " part."
-      )
+    self._allowed_projects = _as_tuple(allowed_projects)
+    self._allowed_locations = _as_tuple(allowed_locations)
+    self._allowed_processors = _as_tuple(allowed_processors)
+    self._allowed_buckets = _as_tuple(allowed_buckets)
 
+    if location is not None:
+      location = validate_location(location, self._allowed_locations)
+    if project_id is not None or not client:
+      project_id = validate_project_id(project_id, self._allowed_projects)
+    if processor_name is not None or not client:
+      processor_name = self._validate_processor(processor_name, location)
+    if gcs_output_path:
+      gcs_output_path = self._validate_gcs_uri(
+          gcs_output_path, allow_prefix_only=True
+      )
+    else:
+      gcs_output_path = None
+
+    self._location = location
     self._gcs_output_path = gcs_output_path
     self._processor_name = processor_name
     if client:
       self._client = client
+      self._use_layout_parser = False
     else:
       try:
         from google.api_core.client_options import ClientOptions
@@ -118,6 +326,24 @@ class DocAIParser(BaseBlobParser):
         self._use_layout_parser = True
       else:
         self._use_layout_parser = False
+
+  def _validate_processor(
+      self, processor_name: Optional[str], location: Optional[str]
+  ) -> str:
+    return validate_processor_name(
+        processor_name,
+        expected_location=location,
+        allowed_processors=getattr(self, "_allowed_processors", None),
+    )
+
+  def _validate_gcs_uri(
+      self, gcs_uri: Optional[str], allow_prefix_only: bool = False
+  ) -> str:
+    return validate_gcs_uri(
+        gcs_uri,
+        allow_prefix_only=allow_prefix_only,
+        allowed_buckets=getattr(self, "_allowed_buckets", None),
+    )
 
   def lazy_parse(self, blob: Blob) -> Iterator[Document]:
     """Parses a blob lazily.
@@ -208,11 +434,16 @@ class DocAIParser(BaseBlobParser):
           individual_page_selector=individual_page_selector,
       )
 
+    validated_processor_name = self._validate_processor(
+        self._processor_name, self._location
+    )
+    validated_gcs_uri = self._validate_gcs_uri(getattr(blob, "path", None))
+
     response = self._client.process_document(
         documentai.ProcessRequest(
-            name=self._processor_name,
+            name=validated_processor_name,
             gcs_document=documentai.GcsDocument(
-                gcs_uri=blob.path,
+                gcs_uri=validated_gcs_uri,
                 mime_type=blob.mimetype or "application/pdf",
             ),
             process_options=process_options,
@@ -322,6 +553,7 @@ class DocAIParser(BaseBlobParser):
           "`pip install langchain-google-community[docai]`"
       ) from exc
     for result in results:
+      self._validate_gcs_uri(result.parsed_path, allow_prefix_only=True)
       print(f"processing: {result.parsed_path}")
       gcs_bucket_name, gcs_prefix = split_gcs_uri(result.parsed_path)
       shards = _get_shards(gcs_bucket_name, gcs_prefix + "/")
@@ -419,9 +651,11 @@ class DocAIParser(BaseBlobParser):
       raise ValueError(
           "An output path on Google Cloud Storage should be provided."
       )
+    output_path = self._validate_gcs_uri(output_path, allow_prefix_only=True)
     processor_name = processor_name or self._processor_name
     if processor_name is None:
       raise ValueError("A Document AI processor name should be provided.")
+    processor_name = self._validate_processor(processor_name, self._location)
 
     operations = []
     for batch in batch_iterate(size=batch_size, iterable=blobs):
@@ -429,7 +663,9 @@ class DocAIParser(BaseBlobParser):
           gcs_documents=documentai.GcsDocuments(
               documents=[
                   documentai.GcsDocument(
-                      gcs_uri=blob.path,
+                      gcs_uri=self._validate_gcs_uri(
+                          getattr(blob, "path", None)
+                      ),
                       mime_type=blob.mimetype or "application/pdf",
                   )
                   for blob in batch

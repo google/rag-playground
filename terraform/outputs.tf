@@ -16,3 +16,8 @@ output "function_uri" {
   description = "URLs of the Cloud Functions"  
   value = values(google_cloudfunctions2_function.rag_playground_cloud_functions)[*].service_config[0].uri  
  }
+
+output "dataflow_security_allowlists" {
+  description = "Allowlists passed to the Dataflow pipeline. Use these values in the frontend's Prepare Data page."
+  value       = local.dataflow_allowlists
+}
