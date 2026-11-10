@@ -53,6 +53,20 @@ def is_url_input(element):
   return element["input"]["type"] == "url"
 
 
+_ALLOWLIST_OPTIONS = (
+    ("allowed_gcs_buckets", "GCS buckets that may be read or written."),
+    ("allowed_gcp_projects", "GCP projects for GCS input and Document AI."),
+    ("allowed_gcs_prefixes", "Optional allowed GCS object prefixes."),
+    ("allowed_docai_processors", "Document AI processor resource names."),
+    ("allowed_docai_locations", "Document AI locations (default: us,eu)."),
+    ("allowed_vector_store_projects", "Vector Search projects."),
+    ("allowed_vector_store_regions", "Vector Search regions."),
+    ("allowed_vector_store_index_ids", "Vector Search index IDs."),
+    ("allowed_vector_store_endpoint_ids", "Vector Search endpoint IDs."),
+    ("allowed_embedding_models", "Vertex AI embedding models."),
+)
+
+
 class CustomPipelineOptions(PipelineOptions):
 
   @classmethod
@@ -71,6 +85,60 @@ class CustomPipelineOptions(PipelineOptions):
         default=1.0,
         help="Output file's window size in minutes.",
     )
+    # Security allowlists (comma-separated). Each one is passed to the DoFn
+    # constructors and pickled to workers. When an option is unset, the DoFn
+    # falls back to the matching environment variable, and fails closed if
+    # that is unset too.
+    for option, help_text in _ALLOWLIST_OPTIONS:
+      parser.add_argument(f"--{option}", default=None, help=help_text)
+
+
+def _split_allowlist(value):
+  """Parses a comma-separated option into a list.
+
+  Returns None when the option is unset or empty so the DoFn falls back to its
+  environment variable (and fails closed if that is unset as well).
+  """
+  if value is None:
+    return None
+  if isinstance(value, (list, tuple)):
+    items = value
+  else:
+    items = str(value).split(",")
+  parsed = [item.strip() for item in items if item and item.strip()]
+  return parsed or None
+
+
+def security_allowlists(custom_options):
+  """Builds the allowlist constructor kwargs for each security-relevant DoFn.
+
+  Args:
+      custom_options (CustomPipelineOptions): The parsed pipeline options.
+
+  Returns:
+      dict: Constructor kwargs keyed by DoFn name.
+  """
+  opt = lambda name: _split_allowlist(getattr(custom_options, name, None))
+  return {
+      "GCSInputFn": {
+          "allowed_buckets": opt("allowed_gcs_buckets"),
+          "allowed_projects": opt("allowed_gcp_projects"),
+          "allowed_prefixes": opt("allowed_gcs_prefixes"),
+      },
+      "GCSLoaderFn": {
+          "allowed_projects": opt("allowed_gcp_projects"),
+          "allowed_locations": opt("allowed_docai_locations"),
+          "allowed_processors": opt("allowed_docai_processors"),
+          "allowed_buckets": opt("allowed_gcs_buckets"),
+      },
+      "UpsertToVectorSearchFn": {
+          "allowed_projects": opt("allowed_vector_store_projects"),
+          "allowed_regions": opt("allowed_vector_store_regions"),
+          "allowed_index_ids": opt("allowed_vector_store_index_ids"),
+          "allowed_endpoint_ids": opt("allowed_vector_store_endpoint_ids"),
+          "allowed_embedding_models": opt("allowed_embedding_models"),
+      },
+  }
 
 
 def batch_if_needed(key_value_pair):
@@ -109,6 +177,7 @@ def run(argv=None):
   pipeline_options = PipelineOptions(argv, save_main_session=True)
   pipeline_options.view_as(StandardOptions).streaming = True
   custom_options = pipeline_options.view_as(CustomPipelineOptions)
+  allowlists = security_allowlists(custom_options)
 
   with beam.Pipeline(options=pipeline_options) as p:
     inputs = (
@@ -124,12 +193,14 @@ def run(argv=None):
     url_inputs = inputs | "FilterURLInputs" >> beam.Filter(is_url_input)
 
     # Process each input type
-    processed_gcs = gcs_inputs | "ProcessGCSInputs" >> beam.ParDo(GCSInputFn())
+    processed_gcs = gcs_inputs | "ProcessGCSInputs" >> beam.ParDo(
+        GCSInputFn(**allowlists["GCSInputFn"])
+    )
     processed_url = url_inputs | "ProcessURLInputs" >> beam.ParDo(URLInputFn())
 
     # Load documents using separate loaders
     loaded_gcs_docs = processed_gcs | "LoadGCSDocuments" >> beam.ParDo(
-        GCSLoaderFn()
+        GCSLoaderFn(**allowlists["GCSLoaderFn"])
     )
     loaded_url_docs = processed_url | "LoadURLDocuments" >> beam.ParDo(
         URLLoaderFn()
@@ -155,7 +226,10 @@ def run(argv=None):
 
     upsert_results = (
         batched_splits
-        | "UpsertToVectorSearch" >> beam.ParDo(UpsertToVectorSearchFn())
+        | "UpsertToVectorSearch"
+        >> beam.ParDo(
+            UpsertToVectorSearchFn(**allowlists["UpsertToVectorSearchFn"])
+        )
         | "LogUpsertResults"
         >> beam.Map(lambda x: logging.info(f"Upsert result: {x}") or x)
     )

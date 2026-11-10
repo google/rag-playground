@@ -26,6 +26,93 @@
             "regexes": [
                 "^[0-9]+(\\.[0-9]+)?$"
             ]
+        },
+        {
+            "helpText": "Comma-separated GCS buckets the pipeline may read documents from or write Document AI output to. The pipeline rejects all GCS input if neither this nor ALLOWED_GCS_BUCKETS is set.",
+            "isOptional": true,
+            "label": "Allowed GCS buckets",
+            "name": "allowed_gcs_buckets",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated projects allowed for GCS input and as the Document AI quota project.",
+            "isOptional": true,
+            "label": "Allowed GCP projects",
+            "name": "allowed_gcp_projects",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Optional comma-separated GCS object prefixes the pipeline may read.",
+            "isOptional": true,
+            "label": "Allowed GCS prefixes",
+            "name": "allowed_gcs_prefixes"
+        },
+        {
+            "helpText": "Comma-separated Document AI processor resource names (projects/NUMBER/locations/LOCATION/processors/ID).",
+            "isOptional": true,
+            "label": "Allowed Document AI processors",
+            "name": "allowed_docai_processors",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated Document AI locations (default: us,eu).",
+            "isOptional": true,
+            "label": "Allowed Document AI locations",
+            "name": "allowed_docai_locations",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated projects that Vector Search upserts may target.",
+            "isOptional": true,
+            "label": "Allowed Vector Search projects",
+            "name": "allowed_vector_store_projects",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated regions that Vector Search upserts may target (default: us-central1).",
+            "isOptional": true,
+            "label": "Allowed Vector Search regions",
+            "name": "allowed_vector_store_regions",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated Vector Search index IDs that may receive upserts.",
+            "isOptional": true,
+            "label": "Allowed Vector Search index IDs",
+            "name": "allowed_vector_store_index_ids",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated Vector Search index endpoint IDs that may receive upserts.",
+            "isOptional": true,
+            "label": "Allowed Vector Search endpoint IDs",
+            "name": "allowed_vector_store_endpoint_ids",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
+        },
+        {
+            "helpText": "Comma-separated Vertex AI embedding models (default: text-embedding-004, text-embedding-preview-0815, text-multilingual-embedding-002).",
+            "isOptional": true,
+            "label": "Allowed embedding models",
+            "name": "allowed_embedding_models",
+            "regexes": [
+                "^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$"
+            ]
         }
     ]
-  }
+}

@@ -21,6 +21,10 @@ from custom_transforms.custom_gcs_directory_loader import (
 )
 
 
+def _as_tuple(values: Optional[Collection[str]]) -> Optional[tuple]:
+  return tuple(values) if values is not None else None
+
+
 class LogInputFn(beam.DoFn):
   """DoFn for logging input elements."""
 
@@ -44,10 +48,18 @@ class GCSInputFn(beam.DoFn):
       self,
       allowed_buckets: Optional[Collection[str]] = None,
       allowed_projects: Optional[Collection[str]] = None,
+      allowed_prefixes: Optional[Collection[str]] = None,
   ):
+    """Initializes the DoFn.
+
+    Allowlists are stored on the instance so they are pickled to Dataflow
+    workers. When an allowlist is None, the matching environment variable
+    (ALLOWED_GCS_BUCKETS, ALLOWED_GCP_PROJECTS, ALLOWED_GCS_PREFIXES) is used.
+    """
     super().__init__()
-    self.allowed_buckets = allowed_buckets
-    self.allowed_projects = allowed_projects
+    self.allowed_buckets = _as_tuple(allowed_buckets)
+    self.allowed_projects = _as_tuple(allowed_projects)
+    self.allowed_prefixes = _as_tuple(allowed_prefixes)
 
   def _validate_element(self, element: dict) -> dict:
     """Validate incoming PubSub message element before accessing GCS."""
@@ -70,6 +82,7 @@ class GCSInputFn(beam.DoFn):
         prefix=prefix,
         allowed_buckets=self.allowed_buckets,
         allowed_projects=self.allowed_projects,
+        allowed_prefixes=self.allowed_prefixes,
     )
 
     return input_config
@@ -92,6 +105,7 @@ class GCSInputFn(beam.DoFn):
           prefix=input_config.get("prefix", ""),
           allowed_buckets=self.allowed_buckets,
           allowed_projects=self.allowed_projects,
+          allowed_prefixes=self.allowed_prefixes,
       )
 
       doc_blobs = loader.load()

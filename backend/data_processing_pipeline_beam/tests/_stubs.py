@@ -59,6 +59,13 @@ class _DoFn:
     pass
 
 
+class _PipelineOptions:
+  """Minimal stand-in; tests parse options via _add_argparse_args instead."""
+
+  def __init__(self, *args, **kwargs):
+    pass
+
+
 class _Blob:
 
   def __init__(self, path=None, mimetype=None, **kwargs):
@@ -102,10 +109,42 @@ class _BaseBlobParser:
   pass
 
 
+REAL_BEAM = _importable("apache_beam")
+
+
 def install():
   """Installs stubs for any dependency that is not importable."""
   if not _importable("apache_beam"):
     _module("apache_beam", DoFn=_DoFn)
+    _module(
+        "apache_beam.options.pipeline_options",
+        PipelineOptions=_PipelineOptions,
+        StandardOptions=_PipelineOptions,
+    )
+    _module(
+        "apache_beam.io.gcp.pubsub",
+        PubsubMessage=object,
+        ReadFromPubSub=object,
+        WriteToPubSub=object,
+    )
+  if not _importable("apache_beam.io") or not hasattr(
+      sys.modules["apache_beam.io"], "PubsubMessage"
+  ):
+    _module("apache_beam.io", PubsubMessage=object)
+  if not _importable("langchain_text_splitters"):
+    _module(
+        "langchain_text_splitters",
+        RecursiveCharacterTextSplitter=type(
+            "RecursiveCharacterTextSplitter", (), {}
+        ),
+    )
+  if not _importable("langchain_community.document_loaders") or not hasattr(
+      sys.modules["langchain_community.document_loaders"], "WebBaseLoader"
+  ):
+    _module(
+        "langchain_community.document_loaders",
+        WebBaseLoader=type("WebBaseLoader", (), {}),
+    )
   if not _importable("langchain_core.documents"):
     _module("langchain_core.documents", Document=_Document)
   if not _importable("langchain_core.document_loaders.blob_loaders"):

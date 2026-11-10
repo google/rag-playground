@@ -73,8 +73,13 @@ def validate_gcs_config(
     prefix: str = "",
     allowed_buckets: Optional[Collection[str]] = None,
     allowed_projects: Optional[Collection[str]] = None,
+    allowed_prefixes: Optional[Collection[str]] = None,
 ) -> None:
-  """Validate GCS project, bucket, and prefix against strict allowlists."""
+  """Validate GCS project, bucket, and prefix against strict allowlists.
+
+  Explicit allowlist arguments take precedence; when an argument is None the
+  corresponding environment variable is used as a fallback.
+  """
   if not isinstance(project_name, str) or not _GCP_PROJECT_PATTERN.fullmatch(
       project_name
   ):
@@ -116,12 +121,18 @@ def validate_gcs_config(
   ):
     raise ValueError(f"Invalid GCS prefix {prefix!r}: path traversal detected.")
 
-  env_prefixes = os.environ.get("ALLOWED_GCS_PREFIXES", "").strip()
-  if env_prefixes:
+  if allowed_prefixes is not None:
     allowed_prefix_list = [
-        p.strip() for p in env_prefixes.split(",") if p.strip()
+        p.strip() for p in allowed_prefixes if isinstance(p, str) and p.strip()
     ]
-    if allowed_prefix_list and not any(
+  else:
+    allowed_prefix_list = [
+        p.strip()
+        for p in os.environ.get("ALLOWED_GCS_PREFIXES", "").split(",")
+        if p.strip()
+    ]
+  if allowed_prefix_list:
+    if not any(
         prefix == p or prefix.startswith(p.rstrip("/") + "/")
         for p in allowed_prefix_list
     ):
@@ -140,15 +151,18 @@ class CustomGCSDirectoryLoader(GCSDirectoryLoader, BaseLoader):
       continue_on_failure: bool = False,
       allowed_buckets: Optional[Collection[str]] = None,
       allowed_projects: Optional[Collection[str]] = None,
+      allowed_prefixes: Optional[Collection[str]] = None,
   ) -> None:
     self.allowed_buckets = allowed_buckets
     self.allowed_projects = allowed_projects
+    self.allowed_prefixes = allowed_prefixes
     validate_gcs_config(
         project_name=project_name,
         bucket=bucket,
         prefix=prefix,
         allowed_buckets=self.allowed_buckets,
         allowed_projects=self.allowed_projects,
+        allowed_prefixes=self.allowed_prefixes,
     )
     super().__init__(
         project_name=project_name,
@@ -165,6 +179,7 @@ class CustomGCSDirectoryLoader(GCSDirectoryLoader, BaseLoader):
         prefix=self.prefix,
         allowed_buckets=getattr(self, "allowed_buckets", None),
         allowed_projects=getattr(self, "allowed_projects", None),
+        allowed_prefixes=getattr(self, "allowed_prefixes", None),
     )
     try:
       from google.cloud import storage

@@ -151,6 +151,10 @@ class GCSLoaderFnSecurityTest(_EnvTestCase):
         location="us",
         processor_name=_PROCESSOR,
         gcs_output_path="gs://rag-output/out",
+        allowed_projects=None,
+        allowed_locations=None,
+        allowed_processors=None,
+        allowed_buckets=None,
     )
     self.assertEqual(len(out), 1)
     self.assertEqual(out[0][0], "gs://rag-docs/docs/a.pdf")

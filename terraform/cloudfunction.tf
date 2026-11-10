@@ -65,6 +65,10 @@ resource "google_cloudfunctions2_function" "rag_playground_cloud_functions" {
     max_instance_request_concurrency = each.value.max_instance_request_concurrency
     all_traffic_on_latest_revision   = true
     service_account_email            = google_service_account.rag_sa_account.email
+    environment_variables = each.key == "source_ans_gen_service" ? merge(
+      { PROJECT_ID = var.project_id },
+      length(var.allowed_llm_models) > 0 ? { ALLOWED_LLM_MODELS = join(",", var.allowed_llm_models) } : {},
+    ) : null
   }
 
   event_trigger {
